@@ -2,8 +2,8 @@
 #include <ev.h>
 #include <amqpcpp.h>
 #include <string>
-#include <signal.h>
-#include <stdlib.h>
+#include <signal.h>             // signal()
+#include <stdlib.h>             // exit()
 #include "../MyTool.h"
 
 using namespace std;
