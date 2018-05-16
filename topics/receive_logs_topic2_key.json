@@ -1,0 +1,9 @@
+{
+    "keys1": [
+        "server_one.info",
+        "server_one.debug"
+    ],
+    "keys2": [
+        "mq_one.*"
+    ]
+}
