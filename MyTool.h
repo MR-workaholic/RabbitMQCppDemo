@@ -9,7 +9,7 @@
 
 class MyTool{
 public:
-  MyTool(struct ev_loop *loop){
+  MyTool(struct ev_loop *loop) {
     handlerPtr = make_shared<MyHandler>(loop);
     connectionPtr = make_shared<AMQP::TcpConnection>(handlerPtr.get(),
                                                      AMQP::Address("amqp://guest:guest@localhost/"));

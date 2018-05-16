@@ -28,7 +28,7 @@ int main(int argc, char *argv[])
     });
 
   tool.GetChannel()->declareQueue("work_queue", AMQP::durable);
-  // 公平调度
+  // 公平调度，必须回复ACK的
   tool.GetChannel()->setQos(1);
 
   tool.GetChannel()->consume("work_queue")

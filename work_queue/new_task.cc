@@ -42,7 +42,6 @@ sig_int(int signo)
   tool.GetConnection()->close();
   ev_break (EV_A_ EVBREAK_ALL);
   exit(0);
-
 }
 
 int main(int argc, char *argv[])
