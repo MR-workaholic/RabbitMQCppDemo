@@ -56,30 +56,30 @@ public:
           cout << "queue name is " << name << "\n";
           this->_queueName = name;
           this->_initFinished = true;
-        });
-    // 在topic下，还是需要绑定队列名字与消息键的
-    tool.GetChannel()->bindQueue("logs_topic", _queueName, _queueName);
+          // 在topic下，还是需要绑定队列名字与消息键的
+          tool.GetChannel()->bindQueue("logs_topic", _queueName, _queueName);
 
 
-    tool.GetChannel()->consume(_queueName, AMQP::noack)
-      .onReceived([this](const Message &message, uint64_t deliveryTag, bool redelivered) {
-          if (_uuid != "" && _uuid == message.correlationID()) {
-            string data(message.body(), message.bodySize());
-            cout << "[x] Received " << data << " from routingkey " << message.routingkey() << "\n";
-            json responseJson = json::parse(data);
-            for(auto& item : responseJson["results"]) {
-              (this->_results).push_back(item);
-            }
-            // 合法的，但是内存会被释放，因为退出函数后引用计数是0，被释放；退出这个lamdba后再次释放 内存，出现double free or corruption错误
-            // (this->_func)(shared_ptr<RpcClient>(this));
-            // 解决方法是：（哈，还是不行，用this初始化智能指针不能提高原智能指针的引用计数）
-            // shared_ptr<RpcClient> tempHandler(this);
-            // (this->_func)(tempHandler);
-            //  解决办法：传入全局变量
-            (this->_func)(rpcclient);
-          }else {
-            cout << "uuid wrong!!!"  << "\n";
-          }
+          tool.GetChannel()->consume(_queueName, AMQP::noack)
+            .onReceived([this](const Message &message, uint64_t deliveryTag, bool redelivered) {
+                if (_uuid != "" && _uuid == message.correlationID()) {
+                  string data(message.body(), message.bodySize());
+                  cout << "[x] Received " << data << " from routingkey " << message.routingkey() << "\n";
+                  json responseJson = json::parse(data);
+                  for(auto& item : responseJson["results"]) {
+                    (this->_results).push_back(item);
+                  }
+                  // 合法的，但是内存会被释放，因为退出函数后引用计数是0，被释放；退出这个lamdba后再次释放 内存，出现double free or corruption错误
+                  // (this->_func)(shared_ptr<RpcClient>(this));
+                  // 解决方法是：（哈，还是不行，用this初始化智能指针不能提高原智能指针的引用计数）
+                  // shared_ptr<RpcClient> tempHandler(this);
+                  // (this->_func)(tempHandler);
+                  //  解决办法：传入全局变量
+                  (this->_func)(rpcclient);
+                }else {
+                  cout << "uuid wrong!!!"  << "\n";
+                }
+              });
         });
 
   }
