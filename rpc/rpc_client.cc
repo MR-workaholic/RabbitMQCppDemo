@@ -55,12 +55,14 @@ public:
       .onSuccess([this](const string &name, uint32_t messagecount, uint32_t consumercount) {
           cout << "queue name is " << name << "\n";
           this->_queueName = name;
-          this->_initFinished = true;
           // 在topic下，还是需要绑定队列名字与消息键的
-          tool.GetChannel()->bindQueue("logs_topic", _queueName, _queueName);
+          tool.GetChannel()->bindQueue("logs_topic", this->_queueName, this->_queueName)
+            .onSuccess([this]() {
+                this->_initFinished = true;
+              });
 
 
-          tool.GetChannel()->consume(_queueName, AMQP::noack)
+          tool.GetChannel()->consume(this->_queueName, AMQP::noack)
             .onReceived([this](const Message &message, uint64_t deliveryTag, bool redelivered) {
                 if (_uuid != "" && _uuid == message.correlationID()) {
                   string data(message.body(), message.bodySize());
