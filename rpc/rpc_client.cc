@@ -16,6 +16,11 @@ n代表clientid，m代表para
 #include <vector>
 #include <memory>
 #include <unistd.h>
+#include <map>
+#include <list>
+#include <utility>
+#include <cstdlib>
+#include <algorithm>
 
 using namespace std;
 using json = nlohmann::json;
@@ -23,13 +28,14 @@ using Envelope = AMQP::Envelope;
 using Message = AMQP::Message;
 
 class RpcClient;
-typedef function<void(shared_ptr<RpcClient>)> cbfun;
+typedef function<void(shared_ptr<RpcClient>, string)> cbfun;
 
 static shared_ptr<RpcClient> rpcclient;
 struct ev_loop* loop = EV_DEFAULT;
 MyTool tool(loop);
 ev_io stdin_watcher;
 size_t cid, para;
+
 
 
 void
@@ -40,7 +46,7 @@ sig_int(int signo){
   exit(0);
 }
 
-class RpcClient{
+class RpcClient {
 public:
   RpcClient(uint8_t id = 0):
     _clientid(id),
@@ -64,20 +70,24 @@ public:
 
           tool.GetChannel()->consume(this->_queueName, AMQP::noack)
             .onReceived([this](const Message &message, uint64_t deliveryTag, bool redelivered) {
-                if (_uuid != "" && _uuid == message.correlationID()) {
+                auto iFind = find((this->_uuidRecord).begin(), (this->_uuidRecord).end(), message.correlationID());
+                if (iFind != (this->_uuidRecord).end()) {
                   string data(message.body(), message.bodySize());
                   cout << "[x] Received " << data << " from routingkey " << message.routingkey() << "\n";
                   json responseJson = json::parse(data);
+                  vector<int> tempRes;
                   for(auto& item : responseJson["results"]) {
-                    (this->_results).push_back(item);
+                    tempRes.push_back(item);
                   }
+                  (this->_resRecord).insert(make_pair((*iFind), tempRes));
                   // 合法的，但是内存会被释放，因为退出函数后引用计数是0，被释放；退出这个lamdba后再次释放 内存，出现double free or corruption错误
                   // (this->_func)(shared_ptr<RpcClient>(this));
                   // 解决方法是：（哈，还是不行，用this初始化智能指针不能提高原智能指针的引用计数）
                   // shared_ptr<RpcClient> tempHandler(this);
                   // (this->_func)(tempHandler);
                   //  解决办法：传入全局变量
-                  (this->_func)(rpcclient);
+                  (this->_func)(rpcclient, *iFind);
+                  (this->_uuidRecord).erase(iFind);
                 }else {
                   cout << "uuid wrong!!!"  << "\n";
                 }
@@ -87,11 +97,13 @@ public:
   }
 
   void recall(size_t para) {
-    _uuid = to_string(static_cast<unsigned>(_clientid)) + to_string(GetMSTimestamp());
-    _results.clear();
-    _para = para;
+    string uuid = to_string(static_cast<unsigned>(_clientid)) + to_string(GetMSTimestamp()) + to_string(rand());
+    // _results.clear();
+    // _para = para;
+    _reqRecord.push_back(make_pair(uuid, para));
+    _uuidRecord.push_back(uuid);
     if (getInitFinished()) {
-      publishreq(_para);
+      publishreq();
     }else {
       _evtimer.set<RpcClient, &RpcClient::timer_cb>(this);
       // 0.5秒后继续检查一次
@@ -108,8 +120,11 @@ public:
     _func = func;
   }
 
-  vector<int> getresults() {
-    return _results;
+  vector<int> getResults(string correlationID) {
+    return _resRecord[correlationID];
+  }
+  void clearResults(string correlationID) {
+    _resRecord.erase(correlationID);
   }
 
   bool getInitFinished() {
@@ -125,13 +140,18 @@ public:
 
 private:
   uint8_t _clientid;
-  string _uuid;
+  // string _uuid;
   string _queueName;
-  vector<int> _results;
+  // vector<int> _results;
   cbfun _func;
   bool _initFinished;
   ev::timer _evtimer;
   size_t _para;
+
+  map<string, vector<int>> _resRecord;
+  list<pair<string, size_t>> _reqRecord;
+  vector<string> _uuidRecord;
+
 
   unsigned long GetMSTimestamp()
   {
@@ -140,24 +160,26 @@ private:
     return t_val.tv_sec * 1000 + t_val.tv_usec / 1000; // 毫秒级别时间戳
   }
 
-  void publishreq(size_t para) {
-    json requestJson;
-    requestJson.emplace("method", "Fibonacci");
-    requestJson.emplace("para", para);
+  void publishreq() {
+    for (auto it = _reqRecord.begin(); it != _reqRecord.end();) {
+      json requestJson;
+      requestJson.emplace("method", "Fibonacci");
+      requestJson.emplace("para", (*it).second);
 
-    // 一定要先将dump()保存到string变量上才执行envelope构造函数
-    string reqStr = requestJson.dump();
-    cout << "[x] Sent request " << reqStr << " uuid is " << _uuid << " queuename is " << _queueName << "\n";
-    Envelope envelope(reqStr.data(), reqStr.size());
-    envelope.setReplyTo(_queueName);
-    envelope.setCorrelationID(_uuid);
-
-    tool.GetChannel()->publish("logs_topic", "rpc_service", envelope);
+      // 一定要先将dump()保存到string变量上才执行envelope构造函数
+      string reqStr = requestJson.dump();
+      cout << "[x] Sent request " << reqStr << " uuid is " << (*it).first << " queuename is " << _queueName << "\n";
+      Envelope envelope(reqStr.data(), reqStr.size());
+      envelope.setReplyTo(_queueName);
+      envelope.setCorrelationID((*it).first);
+      tool.GetChannel()->publish("logs_topic", "rpc_service", envelope);
+      it = _reqRecord.erase(it);
+    }
   }
 
   void timer_cb(ev::timer &w, int revents) {
     if (getInitFinished()) {
-      publishreq(_para);
+      publishreq();
       w.stop();
     }else {
       // 0.5秒后继续检查一次
@@ -173,15 +195,16 @@ void stdin_cb(EV_P_ ev_io *w, int revents) {
   cin >> cid >> para;
 
   if (cid != 0) {
+    // 新建rpc client对象
     rpcclient = make_shared<RpcClient>(cid);
     // cout << rpcclient.use_count()  << "\n";
-
     // 自定义结果处理函数
-    rpcclient->setcbfun([](shared_ptr<RpcClient> handler) {
+    rpcclient->setcbfun([](shared_ptr<RpcClient> handler, string correlationID) {
         // cout << handler.use_count() << "\n";
-        for(auto item : handler->getresults()) {
+        for(auto item : handler->getResults(correlationID)) {
           cout << item  << " ";
         }
+        handler->clearResults(correlationID);
         cout << "\n";
       });
     // 延迟确保rpcclient初始化后才进行recall调用，不能使用挂起系统的同步定时函数，可以使用ev_timer
@@ -191,9 +214,14 @@ void stdin_cb(EV_P_ ev_io *w, int revents) {
     // ev_timer_start (loop, &timeout_watcher);
     // but 现在想将recall改成非阻塞的
     rpcclient->recall(para);
+    // 尝试连续调用
+    rpcclient->recall(para+1);
 
   }else {
     rpcclient->recall(para);
+    // 尝试连续调用
+    rpcclient->recall(para+1);
+
   }
 
 }
